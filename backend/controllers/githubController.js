@@ -757,6 +757,380 @@ Be specific and actionable based on the issue content.`
 }
 
 /**
+ * Analyzes a GitHub repository and suggests top 3 issues
+ * Body: { repoFullName: string, analysisType: string }
+ */
+export const analyzeRepo = async (req, res) => {
+  const token = req.cookies.github_token
+  const { repoFullName, analysisType } = req.body
+
+  if (!repoFullName) {
+    return res.status(400).json({ error: 'Missing required field: repoFullName' })
+  }
+
+  try {
+    // Normalize repo name
+    const normalizedRepoName = String(repoFullName)
+      .trim()
+      .replace(/^https?:\/\/github\.com\//i, '')
+      .replace(/\.git$/i, '')
+      .replace(/\/+$/g, '')
+
+    const [owner, repo] = normalizedRepoName.split('/')
+
+    // Get repository information
+    const authHeaders = token ? { Authorization: `token ${token}` } : {}
+    const repoResponse = await axios.get(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: authHeaders
+    })
+
+    const repoData = repoResponse.data
+
+    // Get repository tree to understand structure
+    const treeResponse = await axios.get(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`, {
+      headers: authHeaders
+    })
+
+    const treeData = treeResponse.data
+
+    // Get key files for analysis
+    let packageJson = null
+    let readmeContent = null
+    let tsConfig = null
+    let sampleCodeFiles = []
+
+    try {
+      // Try to get package.json
+      const packageResponse = await axios.get(`https://api.github.com/repos/${owner}/${repo}/contents/package.json`, {
+        headers: authHeaders
+      })
+      if (packageResponse.data && packageResponse.data.content) {
+        packageJson = Buffer.from(packageResponse.data.content, 'base64').toString()
+      }
+    } catch (e) {
+      console.log('No package.json found')
+    }
+
+    try {
+      // Try to get README
+      const readmeResponse = await axios.get(`https://api.github.com/repos/${owner}/${repo}/contents/README.md`, {
+        headers: authHeaders
+      })
+      if (readmeResponse.data && readmeResponse.data.content) {
+        readmeContent = Buffer.from(readmeResponse.data.content, 'base64').toString()
+      }
+    } catch (e) {
+      console.log('No README.md found')
+    }
+
+    try {
+      // Try to get tsconfig.json
+      const tsConfigResponse = await axios.get(`https://api.github.com/repos/${owner}/${repo}/contents/tsconfig.json`, {
+        headers: authHeaders
+      })
+      if (tsConfigResponse.data && tsConfigResponse.data.content) {
+        tsConfig = Buffer.from(tsConfigResponse.data.content, 'base64').toString()
+      }
+    } catch (e) {
+      console.log('No tsconfig.json found')
+    }
+
+    // Get sample code files for analysis
+    const codeFiles = treeData.tree?.filter(item => 
+      item.type === 'blob' && 
+      (item.path.endsWith('.ts') || item.path.endsWith('.tsx') || item.path.endsWith('.js') || item.path.endsWith('.jsx'))
+    ).slice(0, 5) || []
+
+    console.log(`📁 Found ${codeFiles.length} code files to analyze`)
+
+    for (const file of codeFiles) {
+      try {
+        const fileResponse = await axios.get(`https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`, {
+          headers: authHeaders
+        })
+        if (fileResponse.data && fileResponse.data.content) {
+          const content = Buffer.from(fileResponse.data.content, 'base64').toString()
+          sampleCodeFiles.push({
+            path: file.path,
+            content: content.substring(0, 500) // First 500 chars for analysis
+          })
+          console.log(`✅ Analyzed file: ${file.path}`)
+        }
+      } catch (e) {
+        console.log(`⚠️ Could not read file: ${file.path} - ${e.message}`)
+      }
+    }
+
+    console.log(`📊 Total files analyzed: ${sampleCodeFiles.length}`)
+    console.log(`📋 Package.json: ${packageJson ? 'Found' : 'Missing'}`)
+    console.log(`📖 README: ${readmeContent ? 'Found' : 'Missing'}`)
+    console.log(`⚙️ TSConfig: ${tsConfig ? 'Found' : 'Missing'}`)
+
+    // Analyze repository using AI with actual file content
+    const analysisPrompt = `Analyze this GitHub repository and suggest the top 3 most important issues that need attention. Use the actual repository data provided.
+
+REPOSITORY: ${repoFullName}
+DESCRIPTION: ${repoData.description || 'No description provided'}
+LANGUAGE: ${repoData.language || 'Unknown'}
+STARS: ${repoData.stargazers_count}
+FORKS: ${repoData.forks_count}
+OPEN ISSUES: ${repoData.open_issues_count}
+CREATED: ${repoData.created_at}
+UPDATED: ${repoData.updated_at}
+
+REPOSITORY STRUCTURE (first 30 files):
+${treeData.tree?.slice(0, 30).map(item => `- ${item.path} (${item.type})`).join('\n') || 'No files found'}
+
+PACKAGE.JSON CONTENT:
+${packageJson || 'No package.json found'}
+
+README CONTENT (first 300 chars):
+${readmeContent ? readmeContent.substring(0, 300) + '...' : 'No README found'}
+
+TSCONFIG CONTENT:
+${tsConfig || 'No tsconfig.json found'}
+
+SAMPLE CODE FILES:
+${sampleCodeFiles.map(file => `\n--- ${file.path} ---\n${file.content}`).join('\n')}
+
+Based on this actual repository data, identify the top 3 most critical issues that would improve the codebase. Consider:
+- Missing or incomplete documentation
+- Lack of testing infrastructure
+- Code quality issues (complexity, maintainability)
+- Missing error handling
+- Performance bottlenecks
+- Security concerns
+- Build/deployment configuration issues
+- Dependencies and version management
+
+Provide analysis in this JSON format:
+{
+  "repoSummary": "Detailed analysis of the repository based on actual files and code",
+  "suggestedIssues": [
+    {
+      "title": "Specific, actionable issue title",
+      "description": "Detailed description explaining the issue, why it's important, and what needs to be done. Include specific file paths and technical details.",
+      "difficulty": "easy|medium|hard",
+      "priority": "low|medium|high|critical",
+      "estimatedTime": "realistic time estimate based on code complexity",
+      "category": "bug|enhancement|documentation|testing|performance|security|build|dependencies",
+      "affectedFiles": ["specific file paths that need changes"],
+      "technicalDetails": "Specific technical implementation details and requirements"
+    }
+  ],
+  "overallHealth": "GOOD|FAIR|NEEDS_ATTENTION|CRITICAL",
+  "maintenanceScore": "score out of 10 with explanation",
+  "recommendedActions": [
+    "Specific, actionable steps to improve the repository"
+  ],
+  "codeQualityMetrics": {
+    "complexity": "low|medium|high",
+    "testCoverage": "estimated percentage",
+    "documentation": "poor|fair|good|excellent"
+  }
+}
+
+Be specific and actionable. Base your analysis on the actual repository structure and code content provided. Don't make generic suggestions - analyze the real code and identify real problems.`
+
+    let analysis
+    try {
+      console.log('🔍 Calling OpenRouter API for comprehensive repository analysis...')
+      console.log('📝 Repository:', repoFullName)
+      console.log('📄 Language:', repoData.language)
+      console.log('⭐ Stars:', repoData.stargazers_count)
+      console.log('📁 Files analyzed:', sampleCodeFiles.length)
+      
+      const aiResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer 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',
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://openhub.ai',
+          'X-Title': 'OpenHub AI'
+        },
+        body: JSON.stringify({
+          model: 'openai/gpt-4o',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert software developer and code reviewer. Analyze GitHub repositories by examining actual code, file structure, and configuration files. Provide specific, actionable insights based on real code analysis. Be technical and precise.'
+            },
+            {
+              role: 'user',
+              content: analysisPrompt
+            }
+          ],
+          max_tokens: 1200,
+          temperature: 0.2
+        })
+      })
+
+      console.log('📡 OpenRouter API Response Status:', aiResponse.status)
+
+      if (aiResponse.ok) {
+        const data = await aiResponse.json()
+        console.log('✅ OpenRouter AI response received successfully')
+
+        if (data && data.choices && data.choices[0] && data.choices[0].message) {
+          const aiText = data.choices[0].message.content.trim()
+          console.log('🤖 AI Generated Text (first 300 chars):', aiText.substring(0, 300))
+          
+          // Try to extract JSON from AI response
+          try {
+            const jsonMatch = aiText.match(/\{[\s\S]*\}/)
+            if (jsonMatch) {
+              analysis = JSON.parse(jsonMatch[0])
+              console.log('✅ JSON parsed successfully from AI response')
+              console.log('🔍 Parsed analysis keys:', Object.keys(analysis))
+            } else {
+              throw new Error('No JSON found in response')
+            }
+          } catch (parseError) {
+            console.log('⚠️ JSON parsing failed, using fallback:', parseError.message)
+            // Enhanced fallback based on actual repository data
+            analysis = generateEnhancedFallback(repoData, treeData, packageJson, readmeContent, sampleCodeFiles)
+          }
+        } else {
+          console.log('❌ Invalid response structure from OpenRouter')
+          throw new Error('Invalid response structure')
+        }
+      } else {
+        const errorText = await aiResponse.text()
+        console.log('❌ OpenRouter API failed:', aiResponse.status, errorText)
+        throw new Error(`OpenRouter API failed: ${aiResponse.status}`)
+      }
+    } catch (aiError) {
+      console.error('❌ OpenRouter AI analysis failed, using enhanced fallback:', aiError.message)
+      console.error('🔍 Full error details:', aiError)
+    }
+
+    // Enhanced fallback analysis if AI fails
+    if (!analysis) {
+      analysis = generateEnhancedFallback(repoData, treeData, packageJson, readmeContent, sampleCodeFiles)
+    }
+
+    res.json({ analysis })
+  } catch (error) {
+    console.error('[analyzeRepo] Error:', error.message)
+    res.status(500).json({ error: 'Failed to analyze repository', details: error.message })
+  }
+}
+
+// Helper function to generate enhanced fallback analysis
+function generateEnhancedFallback(repoData, treeData, packageJson, readmeContent, sampleCodeFiles) {
+  const hasPackageJson = !!packageJson
+  const hasReadme = !!readmeContent
+  const hasTests = treeData.tree?.some(item => 
+    item.path.includes('test') || item.path.includes('spec') || item.path.includes('__tests__')
+  )
+  const hasConfigFiles = treeData.tree?.some(item => 
+    item.path.includes('config') || item.path.includes('.env') || item.path.includes('docker')
+  )
+  const hasDocumentation = treeData.tree?.some(item => 
+    item.path.includes('docs') || item.path.includes('documentation') || item.path.includes('wiki')
+  )
+  
+  const issues = []
+  
+  // Issue 1: Documentation
+  if (!hasReadme || readmeContent?.length < 200) {
+    issues.push({
+      title: "Improve Project Documentation",
+      description: `The repository lacks comprehensive documentation. The README is ${hasReadme ? 'minimal' : 'missing'}, and there are no dedicated documentation files. This makes it difficult for new contributors to understand the project structure, setup process, and contribution guidelines.`,
+      difficulty: "easy",
+      priority: "high",
+      estimatedTime: "3-5 hours",
+      category: "documentation",
+      affectedFiles: ["README.md", "docs/", "CONTRIBUTING.md"],
+      technicalDetails: "Create a comprehensive README with installation instructions, usage examples, API documentation, and contribution guidelines. Consider adding a docs/ folder for detailed technical documentation."
+    })
+  }
+  
+  // Issue 2: Testing Infrastructure
+  if (!hasTests) {
+    issues.push({
+      title: "Implement Testing Infrastructure",
+      description: "The repository lacks testing infrastructure, which is critical for code quality and preventing regressions. No test files, testing frameworks, or CI/CD testing workflows are present.",
+      difficulty: "medium",
+      priority: "high",
+      estimatedTime: "6-10 hours",
+      category: "testing",
+      affectedFiles: ["tests/", "jest.config.js", "package.json", ".github/workflows/"],
+      technicalDetails: "Set up Jest or Vitest testing framework, create test directory structure, add test scripts to package.json, and implement basic unit tests for core functionality. Consider adding GitHub Actions for automated testing."
+    })
+  }
+  
+  // Issue 3: Code Quality & Configuration
+  if (!hasConfigFiles || !hasPackageJson) {
+    issues.push({
+      title: "Enhance Project Configuration & Code Quality",
+      description: `The project ${!hasPackageJson ? 'lacks package.json' : 'has minimal configuration'}. Missing essential configuration files for code quality tools, linting, formatting, and build processes.`,
+      difficulty: "medium",
+      priority: "medium",
+      estimatedTime: "4-6 hours",
+      category: "enhancement",
+      affectedFiles: ["package.json", ".eslintrc.js", ".prettierrc", "tsconfig.json", ".gitignore"],
+      technicalDetails: "Add ESLint for code linting, Prettier for code formatting, TypeScript configuration, and proper .gitignore. Configure scripts for linting, formatting, and building."
+    })
+  }
+  
+  // If we don't have 3 issues, add generic ones
+  while (issues.length < 3) {
+    if (issues.length === 0 || !issues.some(i => i.category === 'performance')) {
+      issues.push({
+        title: "Performance Optimization & Monitoring",
+        description: "Implement performance monitoring and optimization strategies. Add performance metrics, bundle analysis, and optimization tools to improve application speed and user experience.",
+        difficulty: "hard",
+        priority: "medium",
+        estimatedTime: "8-12 hours",
+        category: "performance",
+        affectedFiles: ["src/", "webpack.config.js", "package.json"],
+        technicalDetails: "Add bundle analyzers, performance monitoring tools, implement code splitting, and optimize critical rendering paths. Consider adding Lighthouse CI for performance tracking."
+      })
+    } else if (issues.length === 1 || !issues.some(i => i.category === 'security')) {
+      issues.push({
+        title: "Security Hardening & Audit",
+        description: "Implement security best practices and conduct security audit. Add security scanning tools, dependency vulnerability checks, and security headers.",
+        difficulty: "medium",
+        priority: "high",
+        estimatedTime: "5-8 hours",
+        category: "security",
+        affectedFiles: ["package.json", ".github/workflows/", "src/"],
+        technicalDetails: "Add npm audit scripts, GitHub security scanning, implement security headers, validate user inputs, and add rate limiting for API endpoints."
+      })
+    } else {
+      issues.push({
+        title: "Build & Deployment Optimization",
+        description: "Optimize build process and deployment pipeline. Implement proper build tools, environment configuration, and deployment automation.",
+        difficulty: "medium",
+        priority: "medium",
+        estimatedTime: "4-6 hours",
+        category: "build",
+        affectedFiles: ["package.json", "webpack.config.js", ".env", "docker-compose.yml"],
+        technicalDetails: "Configure build optimization, add environment variable management, implement Docker containerization, and set up automated deployment pipelines."
+      })
+    }
+  }
+
+  return {
+    repoSummary: `Repository ${repoData.full_name} is a ${repoData.language || 'software'} project with ${repoData.stargazers_count} stars and ${repoData.forks_count} forks. The project ${hasPackageJson ? 'has basic package management' : 'lacks package configuration'} and ${hasReadme ? 'includes minimal documentation' : 'needs documentation setup'}.`,
+    suggestedIssues: issues,
+    overallHealth: hasPackageJson && hasReadme && hasTests ? "GOOD" : "NEEDS_ATTENTION",
+    maintenanceScore: `${hasPackageJson && hasReadme && hasTests ? 7 : 4}/10`,
+    recommendedActions: [
+      "Start with documentation improvements as they provide immediate value",
+      "Implement testing infrastructure to prevent regressions",
+      "Add code quality tools for consistent development standards"
+    ],
+    codeQualityMetrics: {
+      complexity: "medium",
+      testCoverage: hasTests ? "estimated 20%" : "0%",
+      documentation: hasReadme ? "poor" : "missing"
+    }
+  }
+}
+
+/**
  * Creates a new branch and performs initial setup for issue fix
  * Body: { repoFullName: string, branchName: string, issueNumber: number }
  */

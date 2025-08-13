@@ -1,4 +1,4 @@
-// File: /Users/sriman/Desktop/Projects/OpenHub AI/OpenHub AI/Frontend/app/auth/callback/page.jsx
+// File: /Users/sriman/Desktop/Projects/OpenHub AI(Git)/OpenHub-AI/Frontend/app/auth/callback/page.jsx
 import * as entry from '../../../../../app/auth/callback/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 
