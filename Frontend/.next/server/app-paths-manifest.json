@@ -1,6 +1,6 @@
 {
-  "/page": "app/page.js",
+  "/explorer/page": "app/explorer/page.js",
   "/auth/callback/page": "app/auth/callback/page.js",
-  "/dashboard/page": "app/dashboard/page.js",
-  "/explorer/page": "app/explorer/page.js"
+  "/page": "app/page.js",
+  "/dashboard/page": "app/dashboard/page.js"
 }

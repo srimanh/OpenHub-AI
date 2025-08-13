@@ -750,10 +750,45 @@ export default function Explorer() {
                     />
                     
                     <Card className="bg-white/5 backdrop-blur-xl border border-white/10">
-                      <CardHeader>
-                        <CardTitle className="text-white flex items-center">
-                          <Target className="w-5 h-5 mr-2 text-green-400" />
-                          Repository Issues
+, m                      <CardHeader className="sticky top-0 bg-white/5 backdrop-blur-xl border-b border-white/10 z-10 -mx-6 -mt-6 px-6 pt-6">
+                        <CardTitle className="text-white flex items-center justify-between">
+                          <div className="flex items-center">
+                            <Target className="w-5 h-5 mr-2 text-green-400" />
+                            Repository Issues
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <Button
+                              onClick={() => {
+                                // Trigger AI analysis of the whole repo
+                                setShowIssueAnalysis(true)
+                                setSelectedIssue({ 
+                                  number: 'repo-analysis',
+                                  title: 'Repository Analysis',
+                                  body: 'AI analysis of the entire repository to suggest top 3 issues'
+                                })
+                              }}
+                              variant="outline"
+                              size="sm"
+                              className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20"
+                            >
+                              <Bot className="w-3 h-3 mr-2" />
+                              AI Analysis
+                            </Button>
+                            <Button
+                              onClick={() => {
+                                // Open GitHub new issue page
+                                if (repoInfo?.html_url) {
+                                  window.open(`${repoInfo.html_url}/issues/new`, '_blank')
+                                }
+                              }}
+                              variant="default"
+                              size="sm"
+                              className="bg-green-600 hover:bg-green-700"
+                            >
+                              <GitBranch className="w-3 h-3 mr-2" />
+                              New Issue
+                            </Button>
+                          </div>
                         </CardTitle>
                       </CardHeader>
                       <CardContent>
